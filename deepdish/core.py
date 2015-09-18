@@ -5,45 +5,10 @@ _is_silent = False
 import time
 import warnings
 import numpy as np
+import itertools as itr
 import sys
 from contextlib import contextmanager
 warnings.simplefilter("ignore", np.ComplexWarning)
-
-
-def set_verbose(is_verbose):
-    """
-    Choose whether or not to display output from calls to ``deepdish.info``.
-
-    Parameters
-    ----------
-    is_verbose : bool
-        If set to ``True``, info messages will be printed when running certain
-        functions. Default is ``False``.
-    """
-    global _is_verbose
-    _is_verbose = is_verbose
-
-
-def info(*args, **kwargs):
-    """
-    Output info about the status of running functions. If you are writing a
-    function that might take minutes to complete, periodic calls to the
-    function with a description of the status is recommended.
-
-    This function takes the same arguments as Python 3's ``print`` function.
-    The only difference is that if ``deepdish.set_verbose(True)`` has not be
-    called, it will suppress any output.
-    """
-    if _is_verbose:
-        print(*args, **kwargs)
-
-
-def warning(*args, **kwargs):
-    """
-    Output warning message.
-    """
-    if not _is_silent:
-        print("WARNING: " + args[0], *args[1:], **kwargs)
 
 
 class AbortException(Exception):
@@ -88,7 +53,7 @@ def memsize(arr):
 
 def span(arr):
     """
-    Calculate and return the min and max of an array.
+    Calculate and return the mininum and maximum of an array.
 
     Parameters
     ----------
@@ -97,9 +62,9 @@ def span(arr):
 
     Returns
     -------
-    min : float
+    min : dtype
         Minimum of array.
-    max : float
+    max : dtype
         Maximum of array.
     """
     # TODO: This could be made faster with a custom ufunc
@@ -153,6 +118,7 @@ def apply_once(func, arr, axes, keepdims=True):
             0.26928468,  0.20081239,  0.33052397,  0.29950855,  0.26535717])
 
     This is exactly what this function does for you:
+
     >>> dd.apply_once(np.std, x, [1, 2], keepdims=False)
     array([ 0.17648981,  0.32849108,  0.29409526,  0.25547501,  0.23649064,
             0.26928468,  0.20081239,  0.33052397,  0.29950855,  0.26535717])
@@ -160,7 +126,7 @@ def apply_once(func, arr, axes, keepdims=True):
 
     all_axes = np.arange(arr.ndim)
     if isinstance(axes, int):
-        axes = set(axes)
+        axes = {axes}
     else:
         axes = set(axis % arr.ndim for axis in axes)
 
@@ -196,45 +162,98 @@ def apply_once(func, arr, axes, keepdims=True):
         return collapsed
 
 
+def tupled_argmax(a):
+    """
+    Argmax that returns an index tuple. Note that `numpy.argmax` will return a
+    scalar index as if you had flattened the array.
+
+    Parameters
+    ----------
+    a : array_like
+        Input array.
+
+    Returns
+    -------
+    index : tuple
+        Tuple of index, even if `a` is one-dimensional. Note that this can
+        immediately be used to index `a` as in ``a[index]``.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import deepdish as dd
+    >>> a = np.arange(6).reshape(2,3)
+    >>> a
+    array([[0, 1, 2],
+           [3, 4, 5]])
+    >>> dd.tupled_argmax(a)
+    (1, 2)
+    """
+    return np.unravel_index(np.argmax(a), np.shape(a))
+
+
+def multi_range(*args):
+    return itr.product(*[range(a) for a in args])
+
+
 @contextmanager
-def Timer(name='(no name)', file=sys.stdout):
+def timed(name=None, file=sys.stdout, callback=None, wall_clock=True):
     """
     Context manager to make it easy to time the execution of a piece of code.
     This timer will never run your code several times and is meant more for
-    simple in-production timing, instead of benchmarking.
+    simple in-production timing, instead of benchmarking. Reports the
+    wall-clock time (using `time.time`) and not the processor time.
 
     Parameters
     ----------
     name : str
         Name of the timing block, to identify it.
-    file : file  handler
+    file : file handler
         Which file handler to print the results to. Default is standard output.
         If a numpy array and size 1 is given, the time in seconds will be
-        stored inside it.
+        stored inside it. Ignored if `callback` is set.
+    callback : callable
+        This offer even more flexibility than `file`. The callable will be
+        called at the end of the execution with a single floating point
+        argument with the elapsed time in seconds.
 
     Examples
     --------
     >>> import deepdish as dd
     >>> import time
 
-    The Timer is a context manager, so everything inside the ``with`` block
-    will be timed. The results will be printed to standard output.
+    The `timed` function is a context manager, so everything inside the
+    ``with`` block will be timed. The results will be printed by default to
+    standard output:
 
-    >>> with dd.Timer('Sleep'):  # doctest: +SKIP
-            time.sleep(1)
-    TIMER Sleep: 1.001035451889038 s
+    >>> with dd.timed('Sleep'):  # doctest: +SKIP
+    ...     time.sleep(1)
+    [timed] Sleep: 1.001035451889038 s
 
-    >>> x = np.empty(1)
-    >>> with dd.Timer('Sleep', file=x):  # doctest: +SKIP
-            time.sleep(1)
-    >>> x[0]  # doctest: +SKIP
-    1.0010406970977783
+    Using the `callback` parameter, we can accumulate multiple runs into a
+    list:
+
+    >>> times = []
+    >>> for i in range(3):  # doctest: +SKIP
+    ...     with dd.timed(callback=times.append):
+    ...         time.sleep(1)
+    >>> times  # doctest: +SKIP
+    [1.0035350322723389, 1.0035550594329834, 1.0039470195770264]
     """
     start = time.time()
     yield
     end = time.time()
     delta = end - start
-    if isinstance(file, np.ndarray) and len(file) == 1:
+    if callback is not None:
+        callback(delta)
+    elif isinstance(file, np.ndarray) and len(file) == 1:
         file[0] = delta
     else:
-        print(("TIMER {0}: {1} s".format(name, delta)), file=file)
+        name_str = ' {}'.format(name) if name is not None else ''
+        print(("[timed]{0}: {1} s".format(name_str, delta)), file=file)
+
+
+class SliceClass(object):
+    def __getitem__(self, index):
+        return index
+aslice = SliceClass()

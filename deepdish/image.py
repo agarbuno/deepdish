@@ -1,6 +1,17 @@
+"""
+Basic functions for working with images.
+"""
 from __future__ import division, print_function, absolute_import
 import itertools as itr
 import numpy as np
+
+def _import_skimage():
+    """Import scikit-image, with slightly modified `ImportError` message"""
+    try:
+        import skimage
+    except ImportError:
+        raise ImportError("scikit-image is required to use this function.")
+    return skimage
 
 
 def resize_by_factor(im, factor):
@@ -20,6 +31,7 @@ def resize_by_factor(im, factor):
     factor : float
         Resize factor, e.g. a factor of 0.5 will halve both sides.
     """
+    _import_skimage()
     from skimage.transform.pyramids import pyramid_reduce, pyramid_expand
     if factor < 1:
         return pyramid_reduce(im, downscale=1/factor)
@@ -27,6 +39,24 @@ def resize_by_factor(im, factor):
         return pyramid_expand(im, upscale=factor)
     else:
         return im
+
+
+def resize(im, shape=None, max_side=None, min_side=None):
+    if min_side is not None:
+        min = np.min(im.shape[:2])
+        factor = min_side / min
+        return resize_by_factor(im, factor)
+
+    elif max_side is not None:
+        max = np.max(im.shape[:2])
+        factor = max_side / max
+        return resize_by_factor(im, factor)
+
+    else:
+        factor_y = shape[0] / im.shape[0]
+        factor_x = shape[1] / im.shape[1]
+        assert np.fabs(factor_x - factor_y) < 0.5
+        return resize_by_factor(im, factor_x)
 
 
 def asgray(im):
@@ -79,7 +109,7 @@ def crop_to_bounding_box(im, bb):
     return im[bb[0]:bb[2], bb[1]:bb[3]]
 
 
-def load(path, asfloat=True):
+def load(path, dtype=np.float64):
     """
     Loads an image from file.
 
@@ -87,16 +117,21 @@ def load(path, asfloat=True):
     ----------
     path : str
         Path to image file.
-    asfloat : bool
-        Defaults to True, which means the image will be returned as a float
-        with values between 0 and 1.
+    dtype : np.dtype
+        Defaults to ``np.float64``, which means the image will be returned as a
+        float with values between 0 and 1. If ``np.uint8`` is specified, the
+        values will be between 0 and 255 and no conversion cost will be
+        incurred.
     """
+    _import_skimage()
     import skimage.io
     im = skimage.io.imread(path)
-    if asfloat:
-        return im.astype(np.float64) / 255
-    else:
+    if dtype == np.uint8:
         return im
+    elif dtype in {np.float16, np.float32, np.float64}:
+        return im.astype(dtype) / 255
+    else:
+        raise ValueError('Unsupported dtype')
 
 
 def save(path, im):
